@@ -1,69 +1,77 @@
 # Medical Knowledge Graph - Data Flow Architecture
 
-## High-Level Architecture Diagram
+## MCP Server Architecture (Post-Pivot)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         USER INTERACTIONS                                │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
-│  ┌──────────────┐         ┌──────────────┐        ┌──────────────┐    │
-│  │   Doctor's   │         │   Research   │        │  Web/Mobile  │    │
-│  │   Laptop     │────────▶│  Interface   │◀───────│     App      │    │
-│  │  (Client)    │         │  (FastAPI)   │        │              │    │
-│  └──────────────┘         └──────┬───────┘        └──────────────┘    │
-│                                   │                                     │
-└───────────────────────────────────┼─────────────────────────────────────┘
-                                    │
-                    ┌───────────────┴────────────────┐
-                    │   Application Load Balancer    │
-                    │         (Port 443)             │
-                    └───────────────┬────────────────┘
-                                    │
-┌───────────────────────────────────┼─────────────────────────────────────┐
-│                         QUERY PROCESSING LAYER                           │
-├───────────────────────────────────┼─────────────────────────────────────┤
-│                                   │                                      │
-│                    ┌──────────────▼──────────────┐                     │
-│                    │   ECS Fargate Service       │                     │
-│                    │   (Query API Container)     │                     │
-│                    │   - FastAPI App             │                     │
-│                    │   - Query Generator         │                     │
-│                    │   - Result Aggregator       │                     │
-│                    └──┬─────────────────┬────────┘                     │
-│                       │                 │                               │
-│                       │                 │                               │
-│         ┌─────────────▼─────┐   ┌──────▼────────────┐                 │
-│         │   AWS Bedrock     │   │   AWS Bedrock     │                 │
-│         │   Claude 3.5      │   │   Titan Embed V2  │                 │
-│         │   (NL→Query)      │   │   (Query Embed)   │                 │
-│         └─────────┬─────────┘   └──────┬────────────┘                 │
-│                   │                     │                               │
-└───────────────────┼─────────────────────┼───────────────────────────────┘
-                    │                     │
-        ┌───────────▼─────────────────────▼───────────┐
-        │         QUERY EXECUTION LAYER                │
-        ├──────────────────────────────────────────────┤
-        │                                              │
-        │  ┌──────────────────┐  ┌─────────────────┐ │
-        │  │   OpenSearch     │  │   Neptune       │ │
-        │  │   - Vector KNN   │  │   - Gremlin/    │ │
-        │  │   - Hybrid       │  │     SPARQL      │ │
-        │  │   - Aggregations │  │   - Graph Trav. │ │
-        │  └────────┬─────────┘  └────────┬────────┘ │
-        │           │                     │          │
-        └───────────┼─────────────────────┼──────────┘
-                    │                     │
-                    └──────────┬──────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │  Results Synthesis  │
-                    │  & Formatting       │
-                    └──────────┬──────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │   Return to User    │
-                    └─────────────────────┘
+│  ┌──────────────────┐         ┌───────────────────────────────┐        │
+│  │  Doctor's Laptop │         │   Claude Desktop              │        │
+│  │                  │────────▶│   (or other AI assistant)     │        │
+│  │  User types      │         │                               │        │
+│  │  question        │         │   Decides to use MCP tools    │        │
+│  └──────────────────┘         └───────────────┬───────────────┘        │
+│                                                │                         │
+│                                                │ stdio transport         │
+│                                                │                         │
+│                                 ┌──────────────▼──────────────┐         │
+│                                 │   MCP Server (Local)        │         │
+│                                 │   - pubmed_graph_search     │         │
+│                                 │   - diagnostic_chain_trace  │         │
+│                                 │   - evidence_contradiction  │         │
+│                                 └──────────────┬──────────────┘         │
+│                                                │                         │
+└────────────────────────────────────────────────┼─────────────────────────┘
+                                                 │
+                                                 │ HTTPS/AWS SDK
+                                                 │
+┌────────────────────────────────────────────────┼─────────────────────────┐
+│                         AWS BACKEND SERVICES                             │
+├────────────────────────────────────────────────┼─────────────────────────┤
+│                                                │                          │
+│                                 ┌──────────────▼──────────────┐          │
+│                                 │   MCP Server Client          │          │
+│                                 │   (Queries AWS backend)      │          │
+│                                 └──┬─────────────────┬─────────┘          │
+│                                    │                 │                    │
+│                  ┌─────────────────▼─────┐   ┌──────▼────────────┐      │
+│                  │   AWS Bedrock         │   │   AWS Bedrock     │      │
+│                  │   Claude 3.5          │   │   Titan Embed V2  │      │
+│                  │   (Query reasoning)   │   │   (Query embed)   │      │
+│                  └─────────┬─────────────┘   └──────┬────────────┘      │
+│                            │                         │                    │
+│          ┌─────────────────▼─────────────────────────▼─────────┐        │
+│          │          Amazon OpenSearch Service                  │        │
+│          │          - Vector KNN search                        │        │
+│          │          - Hybrid query (vector + keyword)          │        │
+│          │          - Entity metadata + relationships          │        │
+│          │          - Aggregations and filtering               │        │
+│          └─────────────────────┬───────────────────────────────┘        │
+│                                │                                         │
+│                                │ Results                                 │
+│                                │                                         │
+│                 ┌──────────────▼──────────────┐                         │
+│                 │  Results Synthesis          │                         │
+│                 │  & Evidence Formatting      │                         │
+│                 └──────────────┬──────────────┘                         │
+│                                │                                         │
+└────────────────────────────────┼─────────────────────────────────────────┘
+                                 │
+                                 │ Return JSON response
+                                 │
+                  ┌──────────────▼──────────────┐
+                  │   MCP Server (Local)        │
+                  │   Formats for AI assistant  │
+                  └──────────────┬──────────────┘
+                                 │
+                                 │ stdio transport
+                                 │
+                  ┌──────────────▼──────────────┐
+                  │   Claude Desktop            │
+                  │   Presents results to user  │
+                  └─────────────────────────────┘
 
 
 ═══════════════════════════════════════════════════════════════════════════
@@ -76,7 +84,7 @@
 │                                                                           │
 │  ┌────────────────┐         ┌────────────────┐      ┌─────────────────┐│
 │  │  PubMed Central│         │  Manual Upload │      │  Bulk Download  ││
-│  │  API (E-utils) │         │  (Web UI)      │      │  (FTP Archive)  ││
+│  │  API (E-utils) │         │  (scripts)     │      │  (FTP Archive)  ││
 │  └────────┬───────┘         └────────┬───────┘      └────────┬────────┘│
 │           │                          │                       │          │
 │           └──────────────────────────┼───────────────────────┘          │
@@ -98,14 +106,6 @@
 │                                      │                                    │
 │              ┌───────────────────────▼────────────────────┐              │
 │              │  Lambda: Paper Ingestion Trigger           │              │
-│              │  - Validates XML                           │              │
-│              │  - Triggers ECS task for processing        │              │
-│              └───────────────────┬────────────────────────┘              │
-│                                  │                                        │
-│                                  │ Start ECS Task                         │
-│                                  │                                        │
-│              ┌───────────────────▼────────────────────────┐              │
-│              │  ECS Fargate Task: Ingestion Pipeline      │              │
 │              │  ┌──────────────────────────────────────┐  │              │
 │              │  │ 1. JATS Parser                       │  │              │
 │              │  │    - Extract structure               │  │              │
@@ -138,15 +138,16 @@
 │                                │                                          │
 └────────────────────────────────┼──────────────────────────────────────────┘
                                  │
-                    ┌────────────┴────────────┐
-                    │                         │
-         ┌──────────▼──────────┐   ┌─────────▼──────────┐
-         │   Write to          │   │  Write to          │
-         │   OpenSearch        │   │  Neptune           │
-         │   - Chunks          │   │  - Entities (nodes)│
-         │   - Embeddings      │   │  - Relationships   │
-         │   - Metadata        │   │  - Provenance      │
-         └─────────────────────┘   └────────────────────┘
+                                 │
+                      ┌──────────▼──────────┐
+                      │   Write to          │
+                      │   OpenSearch        │
+                      │   - Chunks          │
+                      │   - Embeddings      │
+                      │   - Metadata        │
+                      │   - Entities        │
+                      │   - Relationships   │
+                      └─────────────────────┘
 
 
 ═══════════════════════════════════════════════════════════════════════════
@@ -165,8 +166,8 @@ PubMed API Request
     └─▶ Store in S3: s3://medical-kg-papers/raw/PMC{id}.xml
 
 
-Step 2: XML Parsing (ECS Task)
-──────────────────────────────
+Step 2: XML Parsing (Lambda)
+─────────────────────────────
 Input:  JATS XML from S3
 Output: Structured paper object
 
@@ -226,8 +227,16 @@ Patterns detected:
     │
     └─▶ Store relationship with provenance
 
-Result: Relationship triples
-    (Gene:BRCA1) -[INCREASES_RISK {risk_ratio: 5.0, source: PMC123}]-> (Disease:BreastCancer)
+Result: Relationship data stored in OpenSearch
+    {
+        subject: "BRCA1",
+        predicate: "INCREASES_RISK",
+        object: "Breast Cancer",
+        confidence: 0.85,
+        source: "PMC123456",
+        section: "results",
+        paragraph: 3
+    }
 
 
 Step 5: Embedding Generation
@@ -247,81 +256,97 @@ Batch of chunks (max 10)
 Result: Chunks with embeddings ready for indexing
 
 
-Step 6: Dual Write to Datastores
-────────────────────────────────
+Step 6: Write to OpenSearch
+────────────────────────────
 Input:  Processed paper data
 Output: Indexed data
 
-┌─────────────────────────┐       ┌──────────────────────────┐
-│   Write to OpenSearch   │       │    Write to Neptune      │
-├─────────────────────────┤       ├──────────────────────────┤
-│                         │       │                          │
-│ For each chunk:         │       │ For each entity:         │
-│   - embedding vector    │       │   CREATE (e:Entity {...})│
-│   - chunk_text          │       │                          │
-│   - section/metadata    │       │ For each relationship:   │
-│   - entities found      │       │   MATCH (a), (b)         │
-│   - paper_id            │       │   CREATE (a)-[r:REL]->(b)│
-│                         │       │                          │
-│ Index name:             │       │ Graph structure:         │
-│   medical-papers        │       │   Nodes + Edges          │
-│                         │       │                          │
-└─────────────────────────┘       └──────────────────────────┘
+┌─────────────────────────────────────────┐
+│      Write to OpenSearch                │
+├─────────────────────────────────────────┤
+│                                         │
+│ For each chunk:                         │
+│   - embedding vector (1024-dim)         │
+│   - chunk_text (full paragraph)         │
+│   - section (results/methods/etc)       │
+│   - entities found ([{id, type, ...}])  │
+│   - paper_id (PMC123456)                │
+│   - metadata (authors, date, journal)   │
+│                                         │
+│ For each relationship:                  │
+│   - subject_entity                      │
+│   - predicate (TREATS, etc)             │
+│   - object_entity                       │
+│   - confidence score                    │
+│   - provenance (PMC, section, para)     │
+│                                         │
+│ Index names:                            │
+│   - medical-papers-chunks               │
+│   - medical-papers-relationships        │
+│                                         │
+└─────────────────────────────────────────┘
 
 
 ═══════════════════════════════════════════════════════════════════════════
-                         QUERY FLOW (Hybrid)
+                      QUERY FLOW VIA MCP SERVER
 ═══════════════════════════════════════════════════════════════════════════
 
 User Query: "What drugs treat BRCA1-mutated breast cancer?"
 
-Step 1: Query Understanding
-───────────────────────────
-Natural Language Query
+Step 1: User Interaction
+────────────────────────
+Doctor types question in Claude Desktop
     │
-    ├─▶ Send to Bedrock Claude 3.5
-    │   Prompt: Convert to graph query JSON
+    └─▶ Claude decides to use MCP tool: pubmed_graph_search
+
+
+Step 2: MCP Tool Call
+─────────────────────
+Claude Desktop → MCP Server (stdio)
     │
-    └─▶ Generate structured query
-
-Result: GraphQuery JSON
-    {
-        "match": {
-            "nodes": [
-                {"var": "gene", "type": "Gene", "properties": {"symbol": "BRCA1"}},
-                {"var": "disease", "type": "Disease", "properties": {"name": "Breast Cancer"}},
-                {"var": "drug", "type": "Drug"}
-            ],
-            "relationships": [
-                {"from": "gene", "to": "disease", "type": "INCREASES_RISK"},
-                {"from": "drug", "to": "disease", "type": "TREATS"}
-            ]
-        },
-        "return": ["drug.name", "treats.efficacy"]
-    }
+    └─▶ Calls: pubmed_graph_search({
+          query: "What drugs treat BRCA1-mutated breast cancer?",
+          depth: 2
+        })
 
 
-Step 2: Parallel Execution
-──────────────────────────
+Step 3: Query Processing (MCP Server → AWS)
+───────────────────────────────────────────
+MCP Server sends query to AWS backend
+    │
+    ├─▶ Call Bedrock Claude 3.5 for query understanding
+    │   - Extract entities: BRCA1 (gene), breast cancer (disease), drugs
+    │   - Identify query type: multi-hop traversal
+    │   - Generate search strategy
+    │
+    └─▶ Create OpenSearch query plan
+
+
+Step 4: OpenSearch Execution
+────────────────────────────
                         ┌──────────────────────┐
-                        │  Orchestration Layer │
+                        │  OpenSearch Queries  │
                         └──────────┬───────────┘
                                    │
                  ┌─────────────────┴─────────────────┐
                  │                                   │
      ┌───────────▼──────────┐          ┌───────────▼──────────┐
-     │   Graph Query        │          │   Vector Search      │
-     │   (Neptune)          │          │   (OpenSearch)       │
+     │  Relationship Query  │          │   Vector Search      │
      ├──────────────────────┤          ├──────────────────────┤
      │                      │          │                      │
-     │ Translate to Cypher: │          │ Generate embedding:  │
-     │ MATCH (g:Gene)       │          │ embed("BRCA1...")    │
-     │   -[:INCREASES_RISK] │          │                      │
-     │   ->(d:Disease)      │          │ KNN search for       │
-     │ <-[:TREATS]-         │          │ similar chunks       │
-     │   (drug:Drug)        │          │                      │
-     │                      │          │ Filter by section:   │
-     │ Execute traversal    │          │ "results"            │
+     │ Query relationships: │          │ Generate embedding:  │
+     │                      │          │ embed("BRCA1...")    │
+     │ subject: "BRCA1"     │          │                      │
+     │ predicate: TREATS    │          │ KNN search for       │
+     │ filter: confidence>0.7│         │ similar chunks       │
+     │                      │          │                      │
+     │ Returns:             │          │ Filter by section:   │
+     │ - Drug entities      │          │ "results"            │
+     │ - Confidence scores  │          │                      │
+     │ - Source papers      │          │ Returns:             │
+     │                      │          │ - Relevant paragraphs│
+     │                      │          │ - Evidence chunks    │
+     │                      │          │ - Provenance         │
      │                      │          │                      │
      └───────────┬──────────┘          └───────────┬──────────┘
                  │                                  │
@@ -332,7 +357,7 @@ Step 2: Parallel Execution
                         ├──────────────────────┤
                         │                      │
                         │ Merge results:       │
-                        │ - Graph entities     │
+                        │ - Relationship data  │
                         │ - Supporting chunks  │
                         │ - Confidence scores  │
                         │ - Source papers      │
@@ -350,13 +375,52 @@ Step 2: Parallel Execution
                         │   "drugs": [         │
                         │     {                │
                         │       "name": "...", │
-                        │       "efficacy": ..│
+                        │       "confidence": │
                         │       "evidence": [ ]│
+                        │       "sources": [ ] │
                         │     }                │
                         │   ]                  │
                         │ }                    │
                         │                      │
                         └──────────────────────┘
+
+
+Step 5: Return to User
+──────────────────────
+Formatted JSON → MCP Server
+    │
+    └─▶ MCP Server returns to Claude Desktop via stdio
+
+Claude Desktop receives structured response
+    │
+    └─▶ Claude formats answer for user with:
+        - Drug names
+        - Evidence strength
+        - Source citations (PMC IDs, sections, paragraphs)
+        - Contradictions flagged (if any)
+
+
+═══════════════════════════════════════════════════════════════════════════
+                         MCP TOOL DESCRIPTIONS
+═══════════════════════════════════════════════════════════════════════════
+
+1. pubmed_graph_search
+   Purpose: Multi-hop reasoning across papers
+   Input: Natural language query + max depth
+   Output: Entities, relationships, evidence with provenance
+   Example: "What proteins interact with BRCA1?" → Multi-hop traversal
+
+2. diagnostic_chain_trace
+   Purpose: Follow symptom → diagnosis → treatment chains
+   Input: Symptoms/findings
+   Output: Possible diagnoses with evidence chains
+   Example: "Elevated ALP + fatigue + rash" → Diagnostic pathway
+
+3. evidence_contradiction_check
+   Purpose: Find contradictory evidence
+   Input: Medical claim or question
+   Output: Supporting vs contradicting evidence
+   Example: "Does aspirin prevent heart attacks?" → Both sides with RCTs
 
 
 ═══════════════════════════════════════════════════════════════════════════
@@ -370,11 +434,10 @@ All components send metrics to CloudWatch:
 ├────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  Logs:                           Metrics:                          │
-│  ├─ Lambda execution logs        ├─ Request latency               │
-│  ├─ ECS task logs                ├─ Error rates                   │
+│  ├─ Lambda execution logs        ├─ Query latency                 │
+│  ├─ MCP server logs (local)      ├─ Error rates                   │
 │  ├─ OpenSearch slow queries      ├─ OpenSearch disk usage         │
-│  └─ Neptune query logs           ├─ Neptune connections           │
-│                                  └─ Bedrock API usage              │
+│  └─ Bedrock API calls            └─ Bedrock API usage              │
 │                                                                     │
 │  Alarms:                         Dashboards:                       │
 │  ├─ High error rate              ├─ Ingestion pipeline status     │
@@ -390,26 +453,29 @@ All components send metrics to CloudWatch:
 ### Ingestion Pipeline
 1. **Download** papers from PubMed Central (JATS XML)
 2. **Store** raw files in S3
-3. **Parse** XML to extract structure and content
-4. **Extract** medical entities and relationships
-5. **Generate** embeddings for text chunks
-6. **Index** to OpenSearch (vectors + metadata)
-7. **Load** entities and relationships into Neptune
+3. **Trigger** Lambda on S3 event
+4. **Parse** XML to extract structure and content
+5. **Extract** medical entities and relationships
+6. **Generate** embeddings for text chunks
+7. **Index** to OpenSearch (vectors + metadata + relationships)
 
-### Query Pipeline
-1. **Receive** natural language query from user
-2. **Convert** to structured graph query (via Claude)
-3. **Execute** parallel searches:
-   - Graph traversal in Neptune
-   - Vector similarity in OpenSearch
-4. **Aggregate** results from both sources
-5. **Rank** by confidence and relevance
-6. **Format** response with evidence
-7. **Return** to user
+### Query Pipeline (via MCP)
+1. **Receive** natural language query from user (via Claude Desktop)
+2. **Call** appropriate MCP tool (pubmed_graph_search, diagnostic_chain_trace, etc.)
+3. **Process** query in MCP server:
+   - Convert to structured query (via Bedrock Claude)
+   - Generate embeddings for vector search (via Bedrock Titan)
+4. **Execute** searches in OpenSearch:
+   - Relationship queries (graph-like traversal)
+   - Vector similarity search
+5. **Aggregate** results from both query types
+6. **Rank** by confidence and relevance
+7. **Format** response with evidence and provenance
+8. **Return** to AI assistant via stdio
+9. **Present** to user with citations
 
 ### Data Stores
 - **S3**: Raw papers, processed data, logs
-- **OpenSearch**: Chunk embeddings, metadata, full-text search
-- **Neptune**: Knowledge graph (entities, relationships, provenance)
-- **Secrets Manager**: Credentials, API keys
+- **OpenSearch**: Chunk embeddings, metadata, entities, relationships, full-text search
+- **Secrets Manager**: Credentials, API keys (OpenSearch, AWS)
 - **Parameter Store**: Configuration values

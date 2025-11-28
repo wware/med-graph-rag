@@ -95,30 +95,6 @@ services:
     profiles:
       - ingestion
 
-  # Query API service - FastAPI server
-  query-api:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.api
-    container_name: medical-kg-api
-    environment:
-      - OPENSEARCH_HOST=opensearch
-      - OPENSEARCH_PORT=9200
-      - AWS_REGION=us-east-1
-      - PYTHONUNBUFFERED=1
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./src:/app/src
-    networks:
-      - medical-kg-network
-    depends_on:
-      - opensearch
-    # Don't start automatically - run manually when needed
-    profiles:
-      - api
-    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
-
 volumes:
   opensearch-data:
     driver: local

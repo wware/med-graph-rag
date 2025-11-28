@@ -1,10 +1,12 @@
 # Local Development Setup
 
+Complete guide for developing the MCP server and backend locally (no AWS deployment needed).
+
 ## Prerequisites
 
 - Docker Desktop installed and running
-- Python 3.12+ (for local development outside containers)
-- AWS CLI configured (for Bedrock access)
+- Python 3.12+ (for local development)
+- AWS CLI configured (for Bedrock access - embeddings only)
 - At least 8GB RAM available for Docker
 
 ## Quick Start
@@ -23,27 +25,64 @@ docker-compose logs -f opensearch
 ```
 
 This starts:
-- OpenSearch at http://localhost:9200
-- OpenSearch Dashboards at http://localhost:5601
-- LocalStack (mock AWS) at http://localhost:4566
+- **OpenSearch** at http://localhost:9200 (vector + keyword search)
+- **OpenSearch Dashboards** at http://localhost:5601 (data exploration)
+- **LocalStack** (optional) at http://localhost:4566 (mock AWS S3)
 
 ### 2. Set Up Python Environment
+
+**Option A: Using `uv` (recommended - 10-100x faster):**
+
+```bash
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh  # Linux/Mac
+# Or: pip install uv
+
+# Create virtual environment and install dependencies
+uv venv
+source .venv/bin/activate  # Linux/Mac
+# OR: .venv\Scripts\activate  # Windows
+
+# Install package in development mode
+uv pip install -e .
+```
+
+**Option B: Using traditional pip:**
 
 ```bash
 # Create virtual environment
 python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# OR: venv\Scripts\activate  # Windows
 
-# Activate (Linux/Mac)
-source venv/bin/activate
-
-# Activate (Windows)
-venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
+# Install package in development mode
+pip install -e .
 ```
 
-### 3. Download Sample Papers
+### 3. Configure Environment
+
+Create a `.env` file in the project root:
+
+```bash
+# OpenSearch (local Docker)
+OPENSEARCH_HOST=localhost
+OPENSEARCH_PORT=9200
+
+# AWS Bedrock (for embeddings only - uses your configured AWS CLI)
+AWS_PROFILE=default
+AWS_REGION=us-east-1
+
+# Optional: LocalStack for S3 testing
+S3_ENDPOINT=http://localhost:4566
+AWS_ACCESS_KEY_ID=test
+AWS_SECRET_ACCESS_KEY=test
+
+# Application settings
+LOG_LEVEL=INFO
+BATCH_SIZE=10
+```
+
+### 4. Download Sample Papers
 
 ```bash
 # Create papers directory
@@ -56,10 +95,10 @@ python -m src.scripts.download_papers \
     --output-dir papers/raw
 ```
 
-### 4. Run Ingestion Pipeline
+### 5. Run Ingestion Pipeline
 
 ```bash
-# Process papers locally (uses local OpenSearch + AWS Bedrock)
+# Process papers (parses XML, generates embeddings, indexes to OpenSearch)
 python -m src.ingestion.pipeline \
     --input-dir papers/raw \
     --batch-size 10
@@ -67,29 +106,44 @@ python -m src.ingestion.pipeline \
 
 This will:
 1. Parse JATS XML files
-2. Extract entities
-3. Generate embeddings (calls AWS Bedrock Titan)
+2. Extract entities and text chunks
+3. Generate embeddings via AWS Bedrock Titan
 4. Index to local OpenSearch
 
-### 5. Test Queries
+### 6. Test MCP Server Locally
 
 ```bash
-# Interactive query testing
-python -m src.scripts.test_queries --interactive
+# Run the MCP server
+python -m src.mcp_server
 
-# Or programmatically
-python -m src.scripts.test_queries \
-    --query "What drugs treat breast cancer?"
+# The server listens on stdio
+# To test with Claude Desktop, add to your config:
+# File: ~/.config/Claude/claude_desktop_config.json
+{
+  "mcpServers": {
+    "pubmed-graph-rag": {
+      "command": "python",
+      "args": ["-m", "src.mcp_server"],
+      "cwd": "/path/to/med-graph-rag"
+    }
+  }
+}
 ```
 
-### 6. Start API Server (Optional)
-
+**For production use:**
 ```bash
-# Start the FastAPI server
-docker-compose --profile api up -d
+# Install as package via uvx
+uvx pubmed-graph-rag
 
-# API available at http://localhost:8000
-# Docs at http://localhost:8000/docs
+# Configure in Claude Desktop
+{
+  "mcpServers": {
+    "pubmed-graph-rag": {
+      "command": "uvx",
+      "args": ["pubmed-graph-rag"]
+    }
+  }
+}
 ```
 
 ## Development Workflow
@@ -108,35 +162,34 @@ curl -X POST http://localhost:9200/medical-papers/_search?pretty \
   -H 'Content-Type: application/json' \
   -d '{"query": {"match_all": {}}}'
 
-# Use OpenSearch Dashboards
+# Use OpenSearch Dashboards UI
 open http://localhost:5601
 ```
 
-### Working with LocalStack (Mock S3)
+### Testing Queries (Direct Backend Access)
 
 ```bash
-# Create S3 bucket
-aws --endpoint-url=http://localhost:4566 s3 mb s3://medical-kg-papers
+# Interactive query testing
+python -m src.scripts.test_queries --interactive
 
-# List buckets
-aws --endpoint-url=http://localhost:4566 s3 ls
-
-# Upload file
-aws --endpoint-url=http://localhost:4566 s3 cp \
-    papers/raw/PMC123456.xml \
-    s3://medical-kg-papers/raw/
+# Or programmatically
+python -m src.scripts.test_queries \
+    --query "What drugs treat breast cancer?"
 ```
 
 ### Running Tests
 
 ```bash
+# Install test dependencies
+pip install pytest pytest-asyncio pytest-cov
+
 # Run all tests
 pytest
 
 # Run with coverage
 pytest --cov=src tests/
 
-# Run specific test file
+# Run specific test
 pytest tests/test_jats_parser.py -v
 ```
 
@@ -149,59 +202,32 @@ black src/
 # Lint code
 ruff check src/
 
-# Type checking
+# Type checking (if mypy configured)
 mypy src/
 ```
 
-## Directory Structure
+## Project Structure
 
 ```
-medical-knowledge-graph/
-├── docker/
-│   ├── Dockerfile.ingestion
-│   └── Dockerfile.api
+med-graph-rag/
 ├── src/
+│   ├── mcp_server.py         # MCP server (NEW - stdio transport)
 │   ├── ingestion/
-│   │   ├── jats_parser.py
+│   │   ├── jats_parser.py    # Parse PubMed XML
 │   │   ├── embedding_generator.py
-│   │   └── pipeline.py
-│   ├── api/
-│   │   └── main.py
+│   │   └── pipeline.py       # Ingestion orchestration
 │   ├── client/
-│   │   └── medical_papers_client.py
+│   │   └── medical_papers_client.py  # OpenSearch client
 │   └── scripts/
 │       ├── download_papers.py
 │       └── test_queries.py
 ├── papers/
-│   ├── raw/          # Downloaded JATS XML files
-│   └── processed/    # Parsed data
+│   ├── raw/                  # Downloaded JATS XML files
+│   └── processed/            # Parsed data (optional)
 ├── tests/
-├── docker-compose.yml
-├── requirements.txt
+├── docker-compose.yml        # Local OpenSearch
+├── pyproject.toml           # Package config + MCP entry point
 └── README.md
-```
-
-## Environment Variables
-
-Create a `.env` file in the project root:
-
-```bash
-# AWS Credentials (for Bedrock)
-AWS_PROFILE=default
-AWS_REGION=us-east-1
-
-# OpenSearch (local)
-OPENSEARCH_HOST=localhost
-OPENSEARCH_PORT=9200
-
-# LocalStack (mock AWS services)
-S3_ENDPOINT=http://localhost:4566
-AWS_ACCESS_KEY_ID=test
-AWS_SECRET_ACCESS_KEY=test
-
-# Application
-LOG_LEVEL=INFO
-BATCH_SIZE=10
 ```
 
 ## Troubleshooting
@@ -226,10 +252,10 @@ docker-compose up -d
 
 ```bash
 # Edit docker-compose.yml to reduce heap size:
-OPENSEARCH_JAVA_OPTS=-Xms256m -Xmx256m
+OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
 ```
 
-### Can't connect to Bedrock
+### Can't connect to AWS Bedrock
 
 ```bash
 # Verify AWS credentials
@@ -238,7 +264,8 @@ aws sts get-caller-identity
 # Check Bedrock model access
 aws bedrock list-foundation-models --region us-east-1
 
-# Enable models in AWS Console if needed
+# Enable Titan Embeddings V2 in AWS Console if needed:
+# https://console.aws.amazon.com/bedrock/ → Model access
 ```
 
 ### Papers not indexing
@@ -250,14 +277,51 @@ curl -X PUT http://localhost:9200/test-index
 # Check index exists
 curl http://localhost:9200/_cat/indices?v
 
-# Check for errors in logs
-docker-compose logs -f
+# Check for errors in pipeline
+python -m src.ingestion.pipeline --input-dir papers/raw --batch-size 1 --verbose
 ```
+
+### MCP Server not responding
+
+```bash
+# Test server directly
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | python -m src.mcp_server
+
+# Check Claude Desktop logs
+# Mac: ~/Library/Logs/Claude/mcp*.log
+# Windows: %APPDATA%\Claude\logs\mcp*.log
+
+# Verify cwd path in config is correct
+```
+
+## Resource Usage
+
+Expected resource usage for local development:
+
+- **OpenSearch**: ~1-2GB RAM, ~5GB disk
+- **LocalStack**: ~500MB RAM (if used)
+- **Ingestion pipeline**: ~500MB RAM (when running)
+- **MCP server**: ~200MB RAM (when serving queries)
+
+**Total**: ~2-3GB RAM when all services running
+
+## Cost Comparison
+
+| Environment | Monthly Cost | Use Case |
+|-------------|--------------|----------|
+| Local Development | ~$2 (Bedrock embeddings only) | Development, testing |
+| AWS POC | ~$50 | Demos, small-scale validation |
+| AWS Production | ~$500-1000 | 1000+ papers, high availability |
+
+**Recommendation**: Develop and test everything locally first. Only deploy to AWS when you need:
+- Persistent storage beyond laptop
+- Demo access for customers
+- Production scale (1000+ papers)
 
 ## Stopping Services
 
 ```bash
-# Stop all services
+# Stop all Docker services
 docker-compose down
 
 # Stop and remove volumes (deletes all data)
@@ -267,38 +331,18 @@ docker-compose down -v
 docker-compose stop opensearch
 ```
 
-## Resource Usage
-
-Expected resource usage for local development:
-
-- OpenSearch: ~1GB RAM, ~5GB disk
-- LocalStack: ~500MB RAM
-- Ingestion service: ~500MB RAM (when running)
-- API service: ~200MB RAM (when running)
-
-Total: ~2-3GB RAM when all services running
-
 ## Next Steps
 
-1. ✅ Start services with `docker-compose up -d`
-2. ✅ Download 100 sample papers
-3. ✅ Run ingestion pipeline
-4. ✅ Test queries
-5. ⏭️  When everything works locally, deploy to AWS
-
-## Cost Comparison
-
-| Environment | Monthly Cost |
-|-------------|--------------|
-| Local Development | $0 (just electricity + ~$2 for Bedrock) |
-| AWS POC | ~$50/month |
-| AWS Production | ~$1,000+/month |
-
-**Recommendation**: Develop and test everything locally first, then deploy to AWS only when ready to demo or when you need full production features.
+1. ✅ Start services: `docker-compose up -d`
+2. ✅ Install Python package: `pip install -e .`
+3. ✅ Download 100 sample papers
+4. ✅ Run ingestion pipeline
+5. ✅ Test MCP server with Claude Desktop
+6. ⏭️  When validated locally, consider AWS deployment (see AWS_BOM.md)
 
 ## Getting Help
 
-- OpenSearch docs: https://opensearch.org/docs/latest/
-- FastAPI docs: https://fastapi.tiangolo.com/
-- Bedrock docs: https://docs.aws.amazon.com/bedrock/
-- Project issues: [your GitHub repo]
+- **OpenSearch**: https://opensearch.org/docs/latest/
+- **MCP Protocol**: https://modelcontextprotocol.io/
+- **AWS Bedrock**: https://docs.aws.amazon.com/bedrock/
+- **Project Issues**: https://github.com/wware/med-graph-rag/issues

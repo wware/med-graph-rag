@@ -96,7 +96,7 @@ The graph contains these relationship types:
 
 ## Query Generation Rules
 
-1. **Use descriptive variable names**: 
+1. **Use descriptive variable names**:
    - Good: `drug`, `disease`, `treats_rel`
    - Bad: `n1`, `n2`, `r`
 
@@ -224,8 +224,8 @@ The graph contains these relationship types:
     ]
   },
   "return": [
-    "treats.efficacy", 
-    "treats.source_papers", 
+    "treats.efficacy",
+    "treats.source_papers",
     "treats.contradicted_by",
     "treats.confidence"
   ]

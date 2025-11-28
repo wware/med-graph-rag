@@ -14,30 +14,50 @@ This schema is designed to support clinical decision-making by representing medi
 
 ## Node Types
 
+### Common Entity Properties
+
+All medical entities (Disease, Gene, Drug, Protein, etc.) share these base properties:
+
+```
+- entity_id: Unique identifier (type-specific, e.g., UMLS ID, HGNC ID)
+- name: Primary canonical name
+- synonyms: [list of alternate names]
+- abbreviations: [common abbreviations, e.g., "T2DM", "NIDDM"]
+- embedding_titan_v2: Pre-computed 1024-dim embedding for semantic search
+- embedding_pubmedbert: Pre-computed 768-dim biomedical embedding
+- created_at: Timestamp when entity was added
+- source: Origin ("umls", "mesh", "rxnorm", "hgnc", "uniprot", "extracted")
+```
+
 ### Core Medical Entities
 
 #### Disease
 Represents medical conditions, disorders, syndromes
 ```
 Properties:
-- id: UMLS Concept ID (e.g., C0006142 for "Breast Cancer")
+- entity_id: UMLS Concept ID (e.g., C0006142 for "Breast Cancer")
 - name: Primary name
 - synonyms: [list of alternate names]
+- abbreviations: [common abbreviations]
+- umls_id: UMLS Concept ID (same as entity_id)
 - mesh_id: Medical Subject Heading ID
 - icd10_codes: [list of ICD-10 codes]
 - category: (genetic, infectious, autoimmune, etc.)
+- [plus common entity properties above]
 ```
 
 #### Gene
 Represents genes and genetic variants
 ```
 Properties:
-- id: Gene ID (e.g., HGNC:1100 for BRCA1)
+- entity_id: HGNC ID (e.g., HGNC:1100 for BRCA1)
 - symbol: Gene symbol (BRCA1)
 - name: Full name
 - synonyms: [alternate symbols]
+- hgnc_id: HGNC identifier (same as entity_id)
 - chromosome: Location (17q21.31)
 - entrez_id: NCBI Gene ID
+- [plus common entity properties above]
 ```
 
 #### Mutation
@@ -55,23 +75,28 @@ Properties:
 Represents medications and therapeutic substances
 ```
 Properties:
-- id: RxNorm Concept ID
+- entity_id: RxNorm Concept ID
 - name: Generic name
+- synonyms: [alternate names]
+- rxnorm_id: RxNorm identifier (same as entity_id)
 - brand_names: [list of brand names]
 - drug_class: (chemotherapy, immunotherapy, etc.)
 - mechanism: Mechanism of action
-- synonyms: [alternate names]
+- [plus common entity properties above]
 ```
 
 #### Protein
 Represents proteins and their functions
 ```
 Properties:
-- id: UniProt ID
+- entity_id: UniProt ID
 - name: Protein name
+- synonyms: [alternate names]
+- uniprot_id: UniProt accession (same as entity_id)
 - gene_id: Encoding gene
 - function: Biological function
 - pathways: [biological pathways involved in]
+- [plus common entity properties above]
 ```
 
 #### Symptom
@@ -98,20 +123,27 @@ Properties:
 Represents measurable indicators
 ```
 Properties:
-- id: LOINC code or UMLS ID
+- entity_id: LOINC code or UMLS ID
 - name: Biomarker name
+- synonyms: [alternate descriptions]
+- loinc_code: LOINC code for standardized lab tests
 - measurement_type: (blood, tissue, imaging)
 - normal_range: Reference values
+- [plus common entity properties above]
 ```
 
 #### Pathway
 Represents biological pathways
 ```
 Properties:
-- id: KEGG or Reactome ID
+- entity_id: KEGG or Reactome ID
 - name: Pathway name
+- synonyms: [alternate names]
+- kegg_id: KEGG pathway identifier
+- reactome_id: Reactome pathway identifier
 - category: (signaling, metabolic, etc.)
 - genes_involved: [list of gene IDs]
+- [plus common entity properties above]
 ```
 
 ### Research Metadata Nodes
@@ -308,10 +340,10 @@ Every medical relationship edge MUST include:
 ```
 - source_papers: [list of PMC IDs supporting this relationship]
 - evidence_count: Number of papers supporting
-- contradicting_papers: [list of PMC IDs contradicting]
+- contradicted_by: [list of PMC IDs contradicting]
 - first_reported: Date first observed
 - last_updated: Most recent evidence
-- confidence: Calculated from evidence strength
+- confidence: Calculated from evidence strength (0.0-1.0)
 ```
 
 ## Confidence Scoring
@@ -360,7 +392,7 @@ Medical knowledge evolves. Track this with:
 Drug -[TREATS {valid_from: "2015", valid_to: "2020"}]-> Disease
   # Was considered treatment from 2015-2020
 
-Drug -[TREATS {valid_from: "2020", valid_to: null}]-> Disease  
+Drug -[TREATS {valid_from: "2020", valid_to: null}]-> Disease
   # New understanding starting 2020
 ```
 
@@ -456,7 +488,7 @@ Drug -[TREATS {valid_from: "2020", valid_to: null}]-> Disease
 
 2. **Entity linking pipeline:**
    ```
-   Extracted text → NER → Candidate entities → 
+   Extracted text → NER → Candidate entities →
    Entity linking → Canonical ID → Graph node
    ```
 
@@ -472,10 +504,41 @@ Drug -[TREATS {valid_from: "2020", valid_to: null}]-> Disease
 3. **Add metadata** - Authors, trials, more detailed provenance
 4. **Refine confidence** - Better scoring as you learn what works
 
-## Next Steps
+## Implementation Notes
 
-1. Choose graph database platform
-2. Design entity extraction pipeline
-3. Build relationship extraction logic
-4. Create confidence scoring system
-5. Integrate with existing vector search
+### Entity Architecture
+
+The implementation uses **strongly-typed entity classes** (Disease, Gene, Drug, Protein, etc.) as the canonical representation for all entities. Each typed entity includes:
+
+- **Type-specific ID fields** (e.g., `umls_id` for Disease, `hgnc_id` for Gene)
+- **Pre-computed embeddings** (Titan v2, PubMedBERT) for semantic search
+- **Provenance metadata** (`source`, `created_at`) for tracking entity origins
+
+This approach provides better type safety and validation compared to a generic entity class.
+
+### Entity Collection Storage
+
+Entities are stored in an `EntityCollection` organized by type:
+- `diseases: Dict[str, Disease]`
+- `genes: Dict[str, Gene]`
+- `drugs: Dict[str, Drug]`
+- `proteins: Dict[str, Protein]`
+- Plus: symptoms, procedures, biomarkers, pathways
+
+Persistence format (JSONL):
+```json
+{"type": "disease", "data": {...}}
+{"type": "gene", "data": {...}}
+```
+
+### Relationship Provenance
+
+All medical relationships inherit from `BaseMedicalRelationship` which includes:
+- `source_papers`: List of PMC IDs
+- `confidence`: Float (0.0-1.0)
+- `evidence_count`: Integer
+- `contradicted_by`: List of PMC IDs
+- `first_reported`: Date string
+- `last_updated`: Date string
+
+Research metadata relationships (`Cites`, `StudiedIn`, `AuthoredBy`, `PartOf`) use a simpler `ResearchRelationship` base class without provenance tracking since they represent bibliographic metadata rather than medical claims.

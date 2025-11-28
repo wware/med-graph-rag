@@ -8,7 +8,7 @@ Defines a composable JSON query format using Pydantic models that can be:
 
 Example usage:
     Natural language: "What drugs treat breast cancer with BRCA1 mutations?"
-    
+
     JSON query:
     {
         "match": {
@@ -105,7 +105,7 @@ class PropertyFilter(BaseModel):
     field: str = Field(..., description="Property name (e.g., 'name', 'confidence')")
     operator: Operator = Field(default=Operator.EQ, description="Comparison operator")
     value: Union[str, int, float, bool, List[Any]] = Field(..., description="Value to compare against")
-    
+
     class Config:
         use_enum_values = True
 
@@ -117,7 +117,7 @@ class Node(BaseModel):
     properties: Optional[Dict[str, Any]] = Field(default=None, description="Exact property matches")
     filters: Optional[List[PropertyFilter]] = Field(default=None, description="Property filters")
     optional: bool = Field(default=False, description="Whether this node is optional (LEFT JOIN)")
-    
+
     class Config:
         use_enum_values = True
 
@@ -132,12 +132,12 @@ class Relationship(BaseModel):
     filters: Optional[List[PropertyFilter]] = Field(default=None, description="Property filters")
     optional: bool = Field(default=False, description="Whether this relationship is optional")
     direction: Literal["outgoing", "incoming", "both"] = Field(
-        default="outgoing", 
+        default="outgoing",
         description="Direction of relationship"
     )
     min_hops: int = Field(default=1, description="Minimum path length (for variable-length paths)")
     max_hops: int = Field(default=1, description="Maximum path length (for variable-length paths)")
-    
+
     class Config:
         use_enum_values = True
         populate_by_name = True
@@ -147,27 +147,27 @@ class MatchPattern(BaseModel):
     """Graph pattern to match"""
     nodes: List[Node] = Field(..., description="Nodes to match")
     relationships: Optional[List[Relationship]] = Field(
-        default=None, 
+        default=None,
         description="Relationships between nodes"
     )
-    
+
     @validator('relationships')
     def validate_relationship_nodes(cls, relationships, values):
         """Ensure relationship endpoints reference defined nodes"""
         if relationships is None:
             return relationships
-        
+
         if 'nodes' not in values:
             return relationships
-        
+
         node_vars = {n.variable for n in values['nodes']}
-        
+
         for rel in relationships:
             if rel.from_node not in node_vars:
                 raise ValueError(f"Relationship 'from' node '{rel.from_node}' not defined in nodes")
             if rel.to_node not in node_vars:
                 raise ValueError(f"Relationship 'to' node '{rel.to_node}' not defined in nodes")
-        
+
         return relationships
 
 
@@ -182,7 +182,7 @@ class Aggregation(BaseModel):
     function: AggregationFunction = Field(..., description="Aggregation function")
     field: str = Field(..., description="Field to aggregate")
     alias: str = Field(..., description="Output alias for aggregated value")
-    
+
     class Config:
         use_enum_values = True
 
@@ -200,38 +200,38 @@ class ReturnField(BaseModel):
 class GraphQuery(BaseModel):
     """
     Complete graph query specification
-    
+
     This is the top-level model that represents a complete graph query.
     Can be composed/nested for complex queries.
     """
     match: MatchPattern = Field(..., description="Graph pattern to match")
-    
+
     where: Optional[List[PropertyFilter]] = Field(
-        default=None, 
+        default=None,
         description="Additional WHERE clause filters"
     )
-    
+
     return_fields: List[Union[str, ReturnField]] = Field(
         default=["*"],
         alias="return",
         description="Fields to return"
     )
-    
+
     distinct: bool = Field(default=False, description="Return distinct results only")
-    
+
     order_by: Optional[List[OrderBy]] = Field(
-        default=None, 
+        default=None,
         description="Sorting specification"
     )
-    
+
     limit: Optional[int] = Field(default=None, description="Maximum number of results")
     skip: Optional[int] = Field(default=None, description="Number of results to skip (for pagination)")
-    
+
     aggregations: Optional[List[Aggregation]] = Field(
         default=None,
         description="Aggregations to compute"
     )
-    
+
     class Config:
         populate_by_name = True
 
@@ -254,7 +254,7 @@ class UnionQuery(BaseModel):
 
 class QueryTranslator:
     """Base class for translating GraphQuery to backend-specific query languages"""
-    
+
     def translate(self, query: GraphQuery) -> str:
         """Translate GraphQuery to backend query language"""
         raise NotImplementedError("Subclasses must implement translate()")
@@ -266,41 +266,41 @@ class QueryTranslator:
 
 class CypherTranslator(QueryTranslator):
     """Translate GraphQuery to Cypher (Neo4j query language)"""
-    
+
     def translate(self, query: GraphQuery) -> str:
         """Translate to Cypher"""
         parts = []
-        
+
         # MATCH clause
         match_clause = self._build_match_clause(query.match)
         parts.append(match_clause)
-        
+
         # WHERE clause
         if query.where:
             where_clause = self._build_where_clause(query.where)
             parts.append(where_clause)
-        
+
         # RETURN clause
         return_clause = self._build_return_clause(
-            query.return_fields, 
+            query.return_fields,
             query.aggregations,
             query.distinct
         )
         parts.append(return_clause)
-        
+
         # ORDER BY clause
         if query.order_by:
             order_clause = self._build_order_clause(query.order_by)
             parts.append(order_clause)
-        
+
         # SKIP/LIMIT
         if query.skip:
             parts.append(f"SKIP {query.skip}")
         if query.limit:
             parts.append(f"LIMIT {query.limit}")
-        
+
         return "\n".join(parts)
-    
+
     def _build_match_clause(self, pattern: MatchPattern) -> str:
         """Build MATCH clause"""
         # Build node patterns
@@ -309,22 +309,22 @@ class CypherTranslator(QueryTranslator):
             props = self._format_properties(node.properties)
             node_pattern = f"({node.variable}:{node.type}{props})"
             node_patterns[node.variable] = node_pattern
-        
+
         # Build relationship patterns
         if not pattern.relationships:
             # Just nodes, no relationships
             return "MATCH " + ", ".join(node_patterns.values())
-        
+
         # Build connected patterns
         paths = []
         for rel in pattern.relationships:
             from_pattern = node_patterns[rel.from_node]
             to_pattern = node_patterns[rel.to_node]
-            
+
             # Relationship pattern
             rel_props = self._format_properties(rel.properties)
             rel_var = f"{rel.variable}:" if rel.variable else ""
-            
+
             if rel.min_hops == 1 and rel.max_hops == 1:
                 # Simple relationship
                 rel_pattern = f"[{rel_var}{rel.type}{rel_props}]"
@@ -332,7 +332,7 @@ class CypherTranslator(QueryTranslator):
                 # Variable-length path
                 hops = f"*{rel.min_hops}..{rel.max_hops}"
                 rel_pattern = f"[{rel_var}{rel.type}{hops}{rel_props}]"
-            
+
             # Direction
             if rel.direction == "outgoing":
                 path = f"{from_pattern}-{rel_pattern}->{to_pattern}"
@@ -340,30 +340,30 @@ class CypherTranslator(QueryTranslator):
                 path = f"{from_pattern}<-{rel_pattern}-{to_pattern}"
             else:  # both
                 path = f"{from_pattern}-{rel_pattern}-{to_pattern}"
-            
+
             paths.append(path)
-        
+
         # For now, simple concatenation - could be smarter about merging overlapping patterns
         return "MATCH " + ", ".join(paths)
-    
+
     def _format_properties(self, props: Optional[Dict[str, Any]]) -> str:
         """Format properties for Cypher"""
         if not props:
             return ""
-        
+
         prop_strs = []
         for key, value in props.items():
             if isinstance(value, str):
                 prop_strs.append(f'{key}: "{value}"')
             else:
                 prop_strs.append(f'{key}: {value}')
-        
+
         return " {" + ", ".join(prop_strs) + "}"
-    
+
     def _build_where_clause(self, filters: List[PropertyFilter]) -> str:
         """Build WHERE clause"""
         conditions = []
-        
+
         for f in filters:
             if f.operator == Operator.EQ:
                 if isinstance(f.value, str):
@@ -384,16 +384,16 @@ class CypherTranslator(QueryTranslator):
             elif f.operator == Operator.CONTAINS:
                 conditions.append(f'{f.field} CONTAINS "{f.value}"')
             # Add other operators as needed
-        
+
         return "WHERE " + " AND ".join(conditions)
-    
-    def _build_return_clause(self, 
+
+    def _build_return_clause(self,
                             return_fields: List[Union[str, ReturnField]],
                             aggregations: Optional[List[Aggregation]],
                             distinct: bool) -> str:
         """Build RETURN clause"""
         returns = []
-        
+
         # Regular fields
         for field in return_fields:
             if isinstance(field, str):
@@ -403,16 +403,16 @@ class CypherTranslator(QueryTranslator):
                     returns.append(f"{field.field} AS {field.alias}")
                 else:
                     returns.append(field.field)
-        
+
         # Aggregations
         if aggregations:
             for agg in aggregations:
                 agg_str = f"{agg.function.upper()}({agg.field}) AS {agg.alias}"
                 returns.append(agg_str)
-        
+
         distinct_str = "DISTINCT " if distinct else ""
         return f"RETURN {distinct_str}" + ", ".join(returns)
-    
+
     def _build_order_clause(self, order_by: List[OrderBy]) -> str:
         """Build ORDER BY clause"""
         orders = [f"{o.field} {o.direction.upper()}" for o in order_by]
@@ -425,7 +425,7 @@ class CypherTranslator(QueryTranslator):
 
 def example_queries():
     """Example queries demonstrating the query language"""
-    
+
     # Example 1: Simple query - "What drugs treat breast cancer?"
     query1 = GraphQuery(
         match=MatchPattern(
@@ -443,7 +443,7 @@ def example_queries():
         order_by=[OrderBy(field="treats.confidence", direction="desc")],
         limit=10
     )
-    
+
     print("Query 1: What drugs treat breast cancer?")
     print("JSON:")
     print(query1.model_dump_json(indent=2, by_alias=True))
@@ -451,7 +451,7 @@ def example_queries():
     translator = CypherTranslator()
     print(translator.translate(query1))
     print("\n" + "="*80 + "\n")
-    
+
     # Example 2: Multi-hop - "What pathways are affected by BRCA1?"
     query2 = GraphQuery(
         match=MatchPattern(
@@ -467,14 +467,14 @@ def example_queries():
         ),
         **{"return": ["pathway.name", "pathway.category"]}
     )
-    
+
     print("Query 2: What pathways are affected by BRCA1?")
     print("JSON:")
     print(query2.model_dump_json(indent=2, by_alias=True))
     print("\nCypher:")
     print(translator.translate(query2))
     print("\n" + "="*80 + "\n")
-    
+
     # Example 3: With filters - "High-confidence treatments for breast cancer"
     query3 = GraphQuery(
         match=MatchPattern(
@@ -494,14 +494,14 @@ def example_queries():
         **{"return": ["drug.name", "treats.efficacy", "treats.confidence"]},
         order_by=[OrderBy(field="treats.confidence", direction="desc")]
     )
-    
+
     print("Query 3: High-confidence treatments for breast cancer")
     print("JSON:")
     print(query3.model_dump_json(indent=2, by_alias=True))
     print("\nCypher:")
     print(translator.translate(query3))
     print("\n" + "="*80 + "\n")
-    
+
     # Example 4: Aggregation - "Count drugs by disease they treat"
     query4 = GraphQuery(
         match=MatchPattern(
@@ -520,7 +520,7 @@ def example_queries():
         order_by=[OrderBy(field="drug_count", direction="desc")],
         limit=20
     )
-    
+
     print("Query 4: Count drugs by disease")
     print("JSON:")
     print(query4.model_dump_json(indent=2, by_alias=True))
