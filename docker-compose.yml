@@ -1,0 +1,130 @@
+version: '3.8'
+
+services:
+  # OpenSearch - for vector search and document storage
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: medical-kg-opensearch
+    environment:
+      - cluster.name=medical-kg-cluster
+      - node.name=opensearch-node1
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=Admin123!
+      # Disable security for local development (DO NOT DO THIS IN PRODUCTION)
+      - plugins.security.disabled=true
+      - plugins.security.ssl.http.enabled=false
+      - plugins.security.ssl.transport.enabled=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    ports:
+      - "9200:9200"  # REST API
+      - "9600:9600"  # Performance Analyzer
+    networks:
+      - medical-kg-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # OpenSearch Dashboards - for visualization and debugging
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.11.0
+    container_name: medical-kg-dashboards
+    ports:
+      - "5601:5601"
+    environment:
+      - OPENSEARCH_HOSTS=http://opensearch:9200
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    networks:
+      - medical-kg-network
+    depends_on:
+      opensearch:
+        condition: service_healthy
+
+  # LocalStack - mock AWS services for local development
+  localstack:
+    image: localstack/localstack:latest
+    container_name: medical-kg-localstack
+    ports:
+      - "4566:4566"  # LocalStack gateway
+    environment:
+      - SERVICES=s3,secretsmanager,ssm
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - localstack-data:/tmp/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - medical-kg-network
+
+  # Ingestion service - processes papers
+  ingestion-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ingestion
+    container_name: medical-kg-ingestion
+    environment:
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_PORT=9200
+      - S3_ENDPOINT=http://localstack:4566
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./papers:/app/papers
+    networks:
+      - medical-kg-network
+    depends_on:
+      - opensearch
+      - localstack
+    # Don't start automatically - run manually when needed
+    profiles:
+      - ingestion
+
+  # Query API service - FastAPI server
+  query-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: medical-kg-api
+    environment:
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_PORT=9200
+      - AWS_REGION=us-east-1
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+    networks:
+      - medical-kg-network
+    depends_on:
+      - opensearch
+    # Don't start automatically - run manually when needed
+    profiles:
+      - api
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  opensearch-data:
+    driver: local
+  localstack-data:
+    driver: local
+
+networks:
+  medical-kg-network:
+    driver: bridge
