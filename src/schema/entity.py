@@ -1,10 +1,29 @@
 """
-This schema uses strongly-typed entity classes (Disease, Gene, Drug, Protein, etc.) as the
-canonical representation for all entities in the knowledge graph. Each typed entity includes:
-- Type-specific ID fields (e.g., umls_id for Disease, hgnc_id for Gene)
-- Pre-computed embeddings (Titan v2, PubMedBERT) for semantic search
-- Provenance metadata (source, created_at) for tracking entity origins
-This approach provides better type safety and validation compared to a generic entity class.
+## Overview
+
+This schema is designed to support clinical decision-making by representing medical knowledge
+extracted from research papers. The graph enables multi-hop reasoning, contradiction detection,
+and evidence-based inference. It uses strongly-typed entity classes (Disease, Gene, Drug,
+Protein, etc.) as the canonical representation for all entities in the knowledge graph.
+This approach provides type safety and validation.
+
+## Design Principles
+
+1. **Clinical utility first** - Schema supports queries doctors actually ask
+2. **Provenance always** - Every relationship traces back to source papers
+3. **Handle uncertainty** - Represent confidence, contradictions, and evolution over time
+4. **Standards-based** - Use UMLS, MeSH, and other medical ontologies for entity IDs
+5. **Scalable** - Can grow from thousands to millions of papers
+
+All medical entities (Disease, Gene, Drug, Protein, etc.) share these base properties:
+
+- entity_id: Unique identifier (type-specific, e.g., UMLS ID, HGNC ID)
+- name: Primary canonical name
+- synonyms: [list of alternate names]
+- abbreviations: [common abbreviations, e.g., "T2DM", "NIDDM"]
+- embedding: Pre-computed biomedical embedding vector
+- created_at: Timestamp when entity was added
+- source: Origin ("umls", "mesh", "rxnorm", "hgnc", "uniprot", "extracted")
 """
 
 import json
@@ -28,8 +47,7 @@ class BaseMedicalEntity(BaseModel):
         name: Primary canonical name for the entity
         synonyms: Alternative names and variants
         abbreviations: Common abbreviations (e.g., "T2DM" for Type 2 Diabetes)
-        embedding_titan_v2: Pre-computed 1024-dim embedding for semantic search
-        embedding_pubmedbert: Pre-computed 768-dim biomedical embedding
+        embedding: Pre-computed biomedical embedding, 768? dimensions
         created_at: Timestamp when entity was added to the system
         source: Origin of this entity (umls, mesh, rxnorm, extracted)
 
@@ -49,8 +67,7 @@ class BaseMedicalEntity(BaseModel):
     abbreviations: List[str] = Field(default_factory=list)
 
     # Embeddings for semantic search (pre-computed)
-    embedding_titan_v2: Optional[List[float]] = None  # 1024-dim
-    embedding_pubmedbert: Optional[List[float]] = None  # 768-dim
+    embedding: Optional[List[float]] = None  # 768-dim
 
     # Metadata for provenance tracking
     created_at: datetime = Field(default_factory=datetime.now)
@@ -587,7 +604,11 @@ class EntityCollection(BaseModel):
                 ("pathway", self.pathways),
             ]:
                 for entity in collection.values():
-                    record = {"type": entity_type, "data": entity.model_dump()}
+                    data = entity.model_dump()
+                    # Convert datetime to ISO string for JSON serialization
+                    if isinstance(data.get("created_at"), datetime):
+                        data["created_at"] = data["created_at"].isoformat()
+                    record = {"type": entity_type, "data": data}
                     f.write(json.dumps(record) + "\n")
 
     @classmethod
@@ -627,6 +648,35 @@ class EntityCollection(BaseModel):
                     collection.pathways[entity.entity_id] = entity
 
         return collection
+
+    def find_by_embedding(
+        self, query_embedding: List[float], top_k: int = 5, threshold: float = 0.85
+    ) -> List[Tuple[BaseMedicalEntity, float]]:
+        """
+        Find entities similar to query embedding.
+        Returns list of (entity, similarity_score) tuples.
+        """
+        from numpy import dot
+        from numpy.linalg import norm
+
+        results = []
+
+        for collection in [self.diseases, self.genes, self.drugs, self.proteins]:
+            for entity in collection.values():
+                if entity.embedding_titan_v2 is None:
+                    continue
+
+                # Cosine similarity
+                similarity = dot(query_embedding, entity.embedding_titan_v2) / (
+                    norm(query_embedding) * norm(entity.embedding_titan_v2)
+                )
+
+                if similarity >= threshold:
+                    results.append((entity, similarity))
+
+        # Sort by similarity
+        results.sort(key=lambda x: x[1], reverse=True)
+        return results[:top_k]
 
 
 # =====================
